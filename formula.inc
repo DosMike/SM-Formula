@@ -48,17 +48,7 @@ native float Formula_GetVariable(const char[] name, bool& isset=false);
  * @param name - the variable that changed
  * @param value - the new value
  */
-forward Action OnFormulaVariableChanged(const char[] name, float& value);
-/**
- * Called when a variable is changed through a formula.
- * This will only be called with changes caused by MathTriggers/Evaluators.
- * To prevent cyclic updates, these listeners will only be called the first
- * time a variable changes every gametick.
- *
- * @param name - the variable that changed
- * @param value - the new value
- */
-forward void OnFormulaVariableChangedPost(const char[] name, float value);
+forward void OnFormulaVariableChanged(const char[] name, float& value);
 
 /**
  * Represents the action of assigning a formula result to an output specified whenever fired
@@ -69,6 +59,11 @@ methodmap Evaluator {
 	 * All errors will be logged with LogError. For more control use Eval.
 	 */
 	public native void Fire();
+	/**
+	 * Set a filter for this Evaluator. Firing will have no effect if this filter failes.
+	 * Set the filter to NULL_STRING to clear it
+	 */
+	public native void SetFilter(const char[] filter);
 	/**
 	 * Remove this Evaluation from it's associated trigger, freeing up the slot
 	 */

@@ -1,11 +1,17 @@
 #include <commandfilters>
 #include <sdkhooks>
 #include <keyvalues>
+#include <regex>
 
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "21w49a"
+#define PLUGIN_VERSION "21w49b"
+
+#define MAX_FORMULA_LENGTH 512
+#define MAX_OUTPUT_LENGTH 128
+#define MAX_TRIGGERNAME_LENGTH 128
+#define MAX_FILTER_LENGTH 256
 
 public Plugin myinfo = {
 	name = "Formula",
@@ -23,11 +29,13 @@ public void OnPluginStart() {
 	__mathcore_init();
 	__api_init();
 	__stdtrigger_init();
+	RegConsoleCmd("sm_test", CommandTest, "");
 	RegConsoleCmd("sm_eval", CommandEval, "Evaluate math expressions with ConVars, targets and variables");
 	RegConsoleCmd("sm_calc", CommandEval, "Evaluate math expressions with ConVars, targets and variables");
 	RegAdminCmd("sm_assign", CommandAssign, ADMFLAG_RCON, "<target> <formula> - Manually compute and assign a value to target");
 	RegAdminCmd("sm_formula", CommandAssign, ADMFLAG_RCON, "<target> <formula> - Manually compute and assign a value to target");
-	RegAdminCmd("sm_formula_reload", CommandReload, ADMFLAG_RCON, "Reload configs (keeps current values)");
+	RegAdminCmd("sm_formula_reload", CommandReload, ADMFLAG_CONFIG, "Reload configs (keeps current values)");
+	RegAdminCmd("sm_formula_unload", CommandUnload, ADMFLAG_CONFIG, "Reload configs (keeps current values)");
 	
 	for (int i=1;i<=MaxClients;i++) {
 		if (IsClientConnected(i)) {
@@ -42,8 +50,15 @@ bool hasAdminFlag(int client, int flags) {
 	return (admin != INVALID_ADMIN_ID) && (admin.GetFlags(Access_Effective)&flags)==flags;
 }
 
+public Action CommandTest(int client, int args) {
+	char f[MAX_FORMULA_LENGTH];
+	GetCmdArgString(f, sizeof(f));
+	ReplaceVarNames(f, sizeof(f));
+	ReplyToCommand(client, "%s", f);
+}
+
 public Action CommandEval(int client, int args) {
-	char f[256];
+	char f[MAX_FORMULA_LENGTH];
 	GetCmdArgString(f, sizeof(f));
 	float result;
 	bool success = eval(f,_,_,result, hasAdminFlag(client, ADMFLAG_RCON));
@@ -64,8 +79,8 @@ public Action CommandEval(int client, int args) {
 }
 
 public Action CommandAssign(int client, int args) {
-	char f[256];
-	char varname[128];
+	char f[MAX_FORMULA_LENGTH];
+	char varname[MAX_OUTPUT_LENGTH];
 	GetCmdArg(1, varname, sizeof(varname));
 	GetCmdArg(2, f, sizeof(f));
 	float result;
@@ -86,6 +101,14 @@ public Action CommandAssign(int client, int args) {
 	return Plugin_Handled;
 }
 
+public Action CommandUnload(int client, int args) {
+	__removeConfigActions();
+	if (GetCmdReplySource()==SM_REPLY_TO_CHAT)
+		ReplyToCommand(client, "\x01\x0798FB98Formulas unloaded all configs");
+	else
+		ReplyToCommand(client, "Formulas unloaded all configs");
+	return Plugin_Handled;
+}
 public Action CommandReload(int client, int args) {
 	ReloadConfigs();
 	if (GetCmdReplySource()==SM_REPLY_TO_CHAT)
@@ -96,7 +119,7 @@ public Action CommandReload(int client, int args) {
 }
 
 static void LoadFromConfig(KeyValues kv) {
-	char name[128], value[512];
+	char name[MAX_FORMULA_LENGTH], value[MAX_FORMULA_LENGTH];
 	int at;
 	if (kv.GotoFirstSubKey()) do {
 		kv.GetSectionName(name, sizeof(name));
@@ -106,13 +129,36 @@ static void LoadFromConfig(KeyValues kv) {
 		if (kv.GotoFirstSubKey(false)) {
 			PrintToServer("Trigger %s:",name);
 			do {
+				//traverse triggers
 				kv.GetSectionName(name, sizeof(name));
 				bool section = kv.GetDataType(NULL_STRING)==KvData_None;
-				if (!section) {
+				bool isFilter = StrEqual(name, "filter", false);
+				if (!section && !isFilter) {
+					//parse unfiltered actions
 					int action;
 					kv.GetString(NULL_STRING, value, sizeof(value));
-					if ((action=CreateAction(_, at, name, value, FSource_Config))>=0)
-						PrintToServer(" %4i  %s = %s",action,name,value);
+					if ((action=CreateAction(_, at, name, value, _, FSource_Config))>=0)
+						PrintToServer(" %08X %s = %s",action,name,value);
+				} else if (section && isFilter) {
+					//parse blocks of "filter fule" { actions }
+					char filter[256]; int fidx;
+					if (kv.GotoFirstSubKey()) do {
+						kv.GetSectionName(filter, sizeof(filter));
+						fidx = CreateFilter(filter);
+						//parse filtered actions
+						if (kv.GotoFirstSubKey(false)) do {
+							kv.GetSectionName(name, sizeof(name));
+							section = kv.GetDataType(NULL_STRING)==KvData_None;
+							if (!section) {
+								int action;
+								kv.GetString(NULL_STRING, value, sizeof(value));
+								if ((action=CreateAction(_, at, name, value, fidx, FSource_Config))>=0)
+									PrintToServer(" %08X %s = %s if: %s",action,name,value,filter);
+							}
+						} while (kv.GotoNextKey(false));
+						kv.GoBack();
+					} while (kv.GotoNextKey());
+					kv.GoBack();
 				}
 				//ideas for formulating sections:
 				// - filters to conditionally trigger

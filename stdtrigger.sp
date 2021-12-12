@@ -28,6 +28,7 @@ void __stdtrigger_init() {
 
 public void OnConfigsExecuted() {
 	CreateTimer(60.0, timerMinute, _, TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
+	UpdateEntityCount();
 	//don't actually use map start as configs are still busy there
 	TriggerAction(trig_map);
 }
@@ -47,10 +48,22 @@ void hookPlayerEntity(int client) {
 	SDKHook(client, SDKHook_SpawnPost, onClientSpawn);
 	SDKHook(client, SDKHook_OnTakeDamagePost, onClientDamagedPost);
 }
+static bool updatingEntityCount;
+static void UpdateEntityCount() {
+	setVariable("$edicts", float(GetEntityCount()), true);
+	updatingEntityCount=false;
+}
 public void OnEntityCreated(int entity, const char[] classname) {
 	if (StrEqual(classname, "player")) {
 		hookPlayerEntity(entity);
 	}
+	UpdateEntityCount();
+}
+public void OnEntityDestroyed(int entity) {
+	//Entities stay alive/valid for the rest of the tick
+	if (updatingEntityCount) return;
+	updatingEntityCount = true;
+	RequestFrame(UpdateEntityCount);
 }
 
 static bool clientDeathHandled[MAXPLAYERS+1];
@@ -75,4 +88,3 @@ void onClientDamagedPost(int victim, int attacker, int inflictor, float damage, 
 public Action timerMinute(Handle timer) {
 	TriggerAction(trig_time);
 }
-

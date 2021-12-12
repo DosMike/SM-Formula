@@ -60,7 +60,7 @@ bool eval(const char[] formula, int parseType=0, int& consumed=0, float& returnV
 	ArrayStack operandStack = new ArrayStack();
 	int cursor;
 	float value; char token; int type;
-	char name[MAX_NAME_LENGTH];
+	char name[MAX_OUTPUT_LENGTH];
 	bool lastValue;
 	MOperator op;
 	int lastOpPriority; //since we only have +- and */ this is simply 1 or 2
@@ -243,7 +243,7 @@ bool eval(const char[] formula, int parseType=0, int& consumed=0, float& returnV
 	return true;
 }
 static bool evalSub(const char[] formula, int& cursor, int parseType, int& consumed=0, float& returnValue) {
-	char subformula[PLATFORM_MAX_PATH];
+	char subformula[MAX_FORMULA_LENGTH];
 	strcopy(subformula, sizeof(subformula), formula[cursor]);
 	if (!eval(subformula, parseType, consumed, returnValue)) return false;
 	cursor += consumed;
@@ -426,12 +426,9 @@ bool getVariable(const char[] name, float& returnValue) {
 bool setVariable(const char[] name, float value, bool notify) {
 	if (name[0]=='$') {
 		notify &= tickAssignments.FindString(name) == -1;
-		if (notify) {
-			tickAssignments.PushString(name);
-			if(NotifyVariableChanged(name, value) >= Plugin_Handled) return true;
-		}
+		if (notify) tickAssignments.PushString(name);
 		varValues.SetValue(name, value);
-		if (notify) NotifyVariableChangedPost(name, value);
+		if (notify) NotifyVariableChanged(name, value);
 	} else if (name[0]=='@') {
 		return PutError2(false, "Can't set value for target selectors (%s)", name);
 	} else {
@@ -445,9 +442,23 @@ bool setVariable(const char[] name, float value, bool notify) {
 	}
 	return true;
 }
+int getVariableType(const char[] name) {
+	PrintToServer("Checking var \"%s\"", name);
+	if (name[0]=='$') {
+		float dummy;
+		if (varValues.GetValue(name, dummy)) return 1;
+	} else if (name[0]!='@') {
+		bool exist;
+		ConVar cvar = FindConVar(name);
+		exist = cvar != null;
+		delete cvar;
+		if (exist) return 2;
+	}
+	return 0;
+}
 
 CVarDataType GetConVarDataType(ConVar cvar) {
-	char buf[64];
+	char buf[32];
 	cvar.GetDefault(buf,sizeof(buf));
 	int slen = strlen(buf);
 	int tmp;
