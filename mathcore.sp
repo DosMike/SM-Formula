@@ -4,12 +4,24 @@
 #define __formula_mathcore
 
 enum MOperator {
-	OP_Plus,
-	OP_Minus,
-	OP_Mult,
-	OP_Div,
-	OP_Modulo,
-	OP_Negate
+	OP_MetaInvalid=-1,
+	OP_Or,     //p1
+	OP_And,    //p1
+	OP_CmpLSS, //p2
+	OP_CmpLEQ, //p2
+	OP_CmpEQU, //p2
+	OP_CmpGEQ, //p2
+	OP_CmpGTR, //p2
+	OP_CmpNEQ, //p2
+	OP_Plus,   //p3
+	OP_Minus,  //p3
+	OP_Mult,   //p4
+	OP_Div,    //p4
+	OP_Modulo, //p4
+	OP_Negate, //"p5", as rtl consumed immediately
+	OP_MetaOpen,
+	OP_MetaClose,
+	OP_MetaComma,
 }
 
 enum CVarDataType {
@@ -50,6 +62,21 @@ static float getOrComputeTargets(const char[] target) {
 	return value;
 }
 
+int GetPriorityOp(MOperator op) {
+	switch (op) {
+		case OP_Or,OP_And: 
+			return 1;
+		case OP_CmpLSS, OP_CmpLEQ, OP_CmpEQU, OP_CmpGEQ, OP_CmpGTR, OP_CmpNEQ: 
+			return 2;
+		case OP_Plus, OP_Minus:
+			return 3;
+		case OP_Mult, OP_Div, OP_Modulo:
+			return 4;
+		default:
+			return 5;
+	}
+}
+
 /** parsetype: 0 root, 1 group, 2 arguments */
 bool eval(const char[] formula, int parseType=0, int& consumed=0, float& returnValue, bool convars=true) {
 	if (parseType==0) {
@@ -59,51 +86,14 @@ bool eval(const char[] formula, int parseType=0, int& consumed=0, float& returnV
 	ArrayStack valueStack = new ArrayStack();
 	ArrayStack operandStack = new ArrayStack();
 	int cursor;
-	float value; char token; int type;
+	float value; MOperator token; int type;
 	char name[MAX_OUTPUT_LENGTH];
 	bool lastValue;
 	MOperator op;
-	int lastOpPriority; //since we only have +- and */ this is simply 1 or 2
+	int lastOpPriority, priority;
 	while (eSkipSpace(formula, cursor)) {
-		if ((token = eGetToken(formula, cursor))) {
-			if (token == '-') {
-				if (lastValue) {
-					if (lastOpPriority > 1) 
-						for (int p=1; !!p;) { if ( (p=collapseStacks(valueStack, operandStack))<0 ) return false; } // completely collapse stacks
-					lastOpPriority = 1;
-					operandStack.Push(OP_Minus);
-					lastValue = false;
-				} else {
-					//no priority here, because we handle negations when reading values
-					if (!operandStack.Empty) {
-						if ((op=operandStack.Pop())==OP_Negate) return PutError2(false,"Minus go brrrrt at %i", cursor);
-						else operandStack.Push(op); //end of peek
-					}
-					operandStack.Push(OP_Negate);
-				}
-			} else if (token == '+') {
-				if (!lastValue) return PutError2(false, "Operator is not unary +");
-				if (lastOpPriority > 1) 
-					for (int p=1; !!p;) { if ( (p=collapseStacks(valueStack, operandStack))<0 ) return false; } // completely collapse stacks
-				lastOpPriority = 1;
-				operandStack.Push(OP_Plus);
-				lastValue = false;
-			} else if (token == '*') {
-				if (!lastValue) return PutError2(false, "Operator is not unary *");
-				lastOpPriority = 2;
-				operandStack.Push(OP_Mult);
-				lastValue = false;
-			} else if (token == '/') {
-				if (!lastValue) return PutError2(false, "Operator is not unary /");
-				lastOpPriority = 2;
-				operandStack.Push(OP_Div);
-				lastValue = false;
-			} else if (token == '%') {
-				if (!lastValue) return PutError2(false, "Operator is not unary %");
-				lastOpPriority = 2;
-				operandStack.Push(OP_Modulo);
-				lastValue = false;
-			} else if (token == '(') {
+		if ((token = eGetToken(formula, cursor, priority))!=OP_MetaInvalid) switch (token) {
+			case OP_MetaOpen: {
 				if (lastValue) return PutError2(false, "Group cannot follow value");
 				if (!evalSub(formula, cursor, 1, _, value)) return false;
 				if (!operandStack.Empty) {
@@ -112,13 +102,39 @@ bool eval(const char[] formula, int parseType=0, int& consumed=0, float& returnV
 				}
 				valueStack.Push(value);
 				lastValue = true;
-			} else if (token == ')' || token == ',') {
+			}
+			case OP_MetaClose,OP_MetaComma: {
 				if (!parseType) return PutError2(false, "Missing opening parathesis at %i", cursor);
-				if (token == ',' && parseType != 2) return PutError2(false, "Too many arguments or not a function at %i", cursor);
+				if (token == OP_MetaComma && parseType != 2) return PutError2(false, "Too many arguments or not a function at %i", cursor);
 				for (int p=1; !!p;) { if ( (p=collapseStacks(valueStack, operandStack))<0 ) return false; } // completely collapse stacks
 				parseType = 0; //suppress the missing paranthesis warning
 				break; //return soon
-			} else {
+			}
+			case OP_Minus: {
+				if (lastValue) {
+					if (lastOpPriority > priority) 
+						for (int p=priority; !!p;) { if ( (p=collapseStacks(valueStack, operandStack))<0 ) return false; } // completely collapse stacks
+					lastOpPriority = priority;
+					operandStack.Push(OP_Minus);
+					lastValue = false;
+				} else {
+					//no priority here, because we handle negations when reading values (rtl)
+					if (!operandStack.Empty) {
+						if ((op=operandStack.Pop())==OP_Negate) return PutError2(false,"Minus go brrrrt at %i", cursor);
+						else operandStack.Push(op); //end of peek
+					}
+					operandStack.Push(OP_Negate);
+				}
+			}
+			case OP_Plus,OP_Mult,OP_Div,OP_Modulo,OP_CmpLSS,OP_CmpLEQ,OP_CmpEQU,OP_CmpGEQ,OP_CmpGTR,OP_CmpNEQ,OP_And,OP_Or: {
+				if (!lastValue) return PutError2(false, "Operator is not unary!");
+				if (lastOpPriority > priority) 
+					for (int p=priority; !!p;) { if ( (p=collapseStacks(valueStack, operandStack))<0 ) return false; } // completely collapse stacks
+				lastOpPriority = priority;
+				operandStack.Push(token);
+				lastValue = false;
+			}
+			default: {
 				//might be a valid token, but not now
 				return PutError2(false, "Syntax error around %i", cursor);
 			}
@@ -134,7 +150,7 @@ bool eval(const char[] formula, int parseType=0, int& consumed=0, float& returnV
 			if (type < 0) return false; //had error
 			else if (lastValue) return PutError2(false, "Operator expected at %i", cursor);
 			else if (type == 1) {
-				if (!eSkipSpace(formula, cursor) || eGetToken(formula, cursor)!='(') {
+				if (!eSkipSpace(formula, cursor) || eGetToken(formula, cursor)!=OP_MetaOpen) {
 					//reached EOF OR read wrong token
 					return PutError2(false, "Function without arguments!");
 				}
@@ -273,19 +289,19 @@ static int collapseStacks(ArrayStack vals, ArrayStack ops) {
 	int priority, postPriority;
 	float value;
 	MOperator op;
+	int oppr;
 	while (!ops.Empty) {
 		op = ops.Pop();
 		value = vals.Pop();
-		if (!priority) { //no priority yet, assign initial
-			if (op <= OP_Plus) priority = 1;
-			else priority = 2;
-		} 
-		if (op <= OP_Plus && priority == 2) { //priority dropped, we found the other bound of operators with equal prioriy
+		oppr = GetPriorityOp(op);
+		if (oppr < 1)
+			return PutError2(-1, "Unknown operator on stack");
+		if (!priority) //no priority yet, assign initial
+			priority = oppr;
+		if (oppr < priority) { //priority dropped, we found the other bound of operators with equal prioriy
 			ops.Push(op); //return op to inital stack, we are not resolving those yet
 			pvals.Push(value); //but keep the value (as left/top most) initial value for later
-			//with our limited set we have no choice, but after collapsing all */, we either get +- (1) or are done (0)
-			//and since +- stacks should always empty (0) we can only return 1 from this priority
-			postPriority = 1;
+			postPriority = oppr; //after collapse we remain with this as highest priority
 			break; //continue with calculating
 		} else {
 			pops.Push(op); //to some value, apply this operator...
@@ -312,6 +328,14 @@ static int collapseStacks(ArrayStack vals, ArrayStack ops) {
 			case OP_Modulo: {
 				result = result - RoundToZero(result / value) * value;
 			}
+			case OP_CmpLSS: result = (result < value) ? 1.0 : 0.0;
+			case OP_CmpLEQ: result = (result <= value) ? 1.0 : 0.0;
+			case OP_CmpEQU: result = (result == value) ? 1.0 : 0.0;
+			case OP_CmpGEQ: result = (result >= value) ? 1.0 : 0.0;
+			case OP_CmpGTR: result = (result > value) ? 1.0 : 0.0;
+			case OP_CmpNEQ: result = (result != value) ? 1.0 : 0.0;
+			case OP_And: result = (result > 0.0 && value > 0.0) ? 1.0 : 0.0;
+			case OP_Or: result = (result > 0.0 || value > 0.0) ? 1.0 : 0.0;
 			default: return PutError2(-1, "Unexpected operator during stack resolution %i", op);
 		}
 	}
@@ -380,15 +404,79 @@ static int eGetLabel(const char[] f, int& cursor, char[] name, int maxsize) {
 	}
 	return type;
 }
-static char eGetToken(const char[] f, int& cursor) {
-	char result;
+static MOperator eGetToken(const char[] f, int& cursor, int& priority=0) {
+	MOperator result;
 	switch (f[cursor]) {
-		case '+','-','*','/','%','(',')',',': result = f[cursor];
 		//quare brackets are aliased here to make formulas work
 		// better with games where valve broke double-quotes
-		case '[': result = '(';
-		case ']': result = ')';
-		default: return 0;
+		case '(','[': {
+			result = OP_MetaOpen;
+			priority = 0;
+		}
+		case ')',']': {
+			result = OP_MetaClose;
+			priority = 0;
+		}
+		case ',': {
+			result = OP_MetaComma;
+			priority = 0;
+		}
+		case '*': {
+			result = OP_Mult;
+			priority = 4;
+		}
+		case '/': {
+			result = OP_Div;
+			priority = 4;
+		}
+		case '%': {
+			result = OP_Modulo;
+			priority = 4;
+		}
+		case '+': {
+			result = OP_Plus;
+			priority = 3;
+		}
+		case '-': {
+			result = OP_Minus;
+			priority = 3;
+		}
+		case '<': {
+			if (f[cursor+1] == '=') {
+				cursor++;
+				result = OP_CmpLEQ;
+			} else if (f[cursor+1] == '>') {
+				cursor++;
+				result = OP_CmpNEQ;
+			} else {
+				result = OP_CmpLSS;
+			}
+			priority = 2;
+		}
+		case '>': {
+			if (f[cursor+1] == '=') {
+				cursor++;
+				result = OP_CmpGEQ;
+			} else {
+				result = OP_CmpGTR;
+			}
+			priority = 2;
+		}
+		case '=': {
+			result = OP_CmpEQU;
+			priority = 2;
+		}
+		case '&': {
+			result = OP_And;
+			priority = 1;
+		}
+		case '|': {
+			result = OP_Or;
+			priority = 1;
+		}
+		default: {
+			return OP_MetaInvalid;
+		}
 	}
 	cursor++;
 	return result;
@@ -443,7 +531,6 @@ bool setVariable(const char[] name, float value, bool notify) {
 	return true;
 }
 int getVariableType(const char[] name) {
-	PrintToServer("Checking var \"%s\"", name);
 	if (name[0]=='$') {
 		float dummy;
 		if (varValues.GetValue(name, dummy)) return 1;

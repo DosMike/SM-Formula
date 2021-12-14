@@ -28,6 +28,13 @@ The following function are currently supported:
 | rand(a,b) | Random value between `[a,b)` |
 | if(c,t,f) | Conditional, returning `t` if `c` > 0, `f` otherwise |
 
+In addition to addition, subtraction, multiplication, division and modulo (remainder) you can also compare values logically using `<`,`<=`,`=`,`>=`,`>`,`<>` with the last one being inequality. These comparisons will result in 1.0 if the equation holds, and 0.0 if it doesnt. While you could use multiplication and addition to logically chain conditions, it's easier to use `&` for 'x and y' and `|` for 'x or y'. Especially using the following operation precedence, it makes writing conditions a lot more convenient (order first to last):
+- Parentheses
+- Multiplication, Division and Modulo
+- Addition, Subtraction
+- Comparisons (`<`,`<=`,`=`,`>=`,`>`,`<>`)
+- Conjunction (and) and Disjunction (or) 
+
 ## Configs
 
 The point after all, was to automatically set ConVars.
@@ -72,7 +79,9 @@ Because this command can read and set ConVars, it requires the RCon admin-flag.
 You can use `sm_eval <formula>` or `sm_calc <formula>` to compute values, the result is displayed to you.
 This is available to all players, but only players with the RCon admin-flag can use ConVars!
 
-If you need to reload the configs, use `sm_formula_reload`. This should keep all user variables, unless assigned in `OnFormulasReloaded`.
+If you need to reload the configs, you can use `sm_formula_reload`. This should keep all user variables, unless assigned in `OnFormulasReloaded`.
+
+In case you want to unload all configs for some reason, you can do so with `sm_formula_unload` instead of `sm plugins unload formula`. This will keep current user vars in memory as well. This command as well as the reload command requires the config admin flag (This should come as no surprise, you're un-/reloading configs here).
 
 ## Plugins
 

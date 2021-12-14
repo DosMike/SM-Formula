@@ -6,7 +6,7 @@
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "21w49b"
+#define PLUGIN_VERSION "21w50a"
 
 #define MAX_FORMULA_LENGTH 512
 #define MAX_OUTPUT_LENGTH 128
@@ -29,7 +29,6 @@ public void OnPluginStart() {
 	__mathcore_init();
 	__api_init();
 	__stdtrigger_init();
-	RegConsoleCmd("sm_test", CommandTest, "");
 	RegConsoleCmd("sm_eval", CommandEval, "Evaluate math expressions with ConVars, targets and variables");
 	RegConsoleCmd("sm_calc", CommandEval, "Evaluate math expressions with ConVars, targets and variables");
 	RegAdminCmd("sm_assign", CommandAssign, ADMFLAG_RCON, "<target> <formula> - Manually compute and assign a value to target");
@@ -48,13 +47,6 @@ bool hasAdminFlag(int client, int flags) {
 	if (!client) return true;
 	AdminId admin = GetUserAdmin(client);
 	return (admin != INVALID_ADMIN_ID) && (admin.GetFlags(Access_Effective)&flags)==flags;
-}
-
-public Action CommandTest(int client, int args) {
-	char f[MAX_FORMULA_LENGTH];
-	GetCmdArgString(f, sizeof(f));
-	ReplaceVarNames(f, sizeof(f));
-	ReplyToCommand(client, "%s", f);
 }
 
 public Action CommandEval(int client, int args) {
