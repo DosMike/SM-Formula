@@ -1,13 +1,17 @@
+#if !defined __formula
+#error Not compiling from main file!
+#endif
 #if defined __formula_api
 #endinput
 #endif
 #define __formula_api
 
-#define TriggerToIdBits(%1) (((%1)&0x0fff)<<20)
-#define TriggerOfIdBits(%1) (((%1)>>20)&0x0fff)
+//keep the signum bit free to signal errors
+#define TriggerToIdBits(%1) (((%1)&0x07ff)<<20)
+#define TriggerOfIdBits(%1) (((%1)>>20)&0x07ff)
 #define ActionMask 0x000fffff
-#define TriggerMask 0xfff00000
-#define MAX_TRIGGERS 0x1000
+#define TriggerMask 0x7ff00000
+#define MAX_TRIGGERS 0x800
 #define MAX_ACTIONS 0x100000
 #define MAX_FILTERS 2048
 
@@ -19,15 +23,16 @@ enum eFormulaSource {
 enum struct FormulaAction {
 	int key; //trigger id & action pseudo
 	eFormulaSource source;
-	int filter;
 	Handle owner; //for error printing
+	int sourceConfigName; //into config name list, for error printing and to prevent double loading
+	int filter;
 	char output[MAX_OUTPUT_LENGTH];
 	char formula[MAX_FORMULA_LENGTH];
 }
-ArrayList triggerNames;
+static ArrayList triggerNames;
 static ArrayList autoActions;
-ArrayList autoFilters;
-static Regex varFormat;
+static ArrayList autoFilters;
+ArrayList sourceConfigNames;
 
 GlobalForward fwdVariableChanged;
 
@@ -41,16 +46,12 @@ void __api_init() {
 		autoFilters = new ArrayList(ByteCountToCells(MAX_FILTER_LENGTH));
 	else
 		autoFilters.Clear();
+	if (sourceConfigNames == null)
+		sourceConfigNames = new ArrayList(ByteCountToCells(128));
+	else
+		sourceConfigNames.Clear();
 	if (fwdVariableChanged == null)
 		fwdVariableChanged = new GlobalForward("OnFormulaVariableChanged", ET_Ignore, Param_String, Param_Float);
-	if (varFormat == null) {
-		char error[512];
-		RegexError code;
-		varFormat = new Regex("\\b([if][$]\\w+)\\b", PCRE_CASELESS, error, sizeof(error), code);
-		if (code != REGEX_ERROR_NONE) {
-			PrintToServer("Regex Error %i: %s", code, error);
-		}
-	}
 }
 
 void __removeConfigActions() {
@@ -63,9 +64,9 @@ void __removeConfigActions() {
 	}
 	d = autoFilters.Length;
 	autoFilters.Clear();
+	sourceConfigNames.Clear();
 	PrintToServer("Dropped %i Actions and %i Filters", c, d);
 }
-
 
 // == native stuff
 
@@ -85,6 +86,7 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 	CreateNative("MathTrigger.MathTrigger", Native_MathTrigger_new);
 	CreateNative("MathTrigger.AddFormula", Native_MathTrigger_AddFormula);
 	CreateNative("MathTrigger.Fire", Native_MathTrigger_Fire);
+	CreateNative("MathTrigger.GetEvaluators", Native_MathTrigger_GetEvaluators);
 	RegPluginLibrary("formula");
 }
 // native bool Formula_Eval(const char[] formula, float& result, bool convars=true, char[] error="", int maxsize=0)
@@ -119,7 +121,7 @@ public any Native_Formula_SetVariable(Handle plugin, int argc) {
 	//validate name
 	checkWordChars(varname, 1);
 	float value = view_as<float>(GetNativeCell(2));
-	setVariable(varname, value, false);
+	setVariable(varname, value, false, 0);
 }
 // native float Formula_GetVariable(const char[] name, bool& isset=false)
 public any Native_Formula_GetVariable(Handle plugin, int argc) {
@@ -169,7 +171,7 @@ public any Native_MathTrigger_AddFormula(Handle plugin, int argc) {
 	char[] formula = new char[++formulaLen];
 	GetNativeString(3, formula, formulaLen);
 	//doit
-	int evaluator = CreateAction(plugin, trigger, output, formula, _, FSource_Plugin);
+	int evaluator = CreateAction(plugin, trigger, output, formula, _, -1);
 	if (evaluator == -1) ThrowNativeError(SP_ERROR_NATIVE, "Could not create Evaluator - MathTrigger is invalid!");
 	else if (evaluator == -2) ThrowNativeError(SP_ERROR_NATIVE, "Could not create Evaluator - Limit exhausted!");
 	return evaluator;
@@ -180,15 +182,28 @@ public any Native_MathTrigger_Fire(Handle plugin, int argc) {
 	if (!TriggerAction(trigger))
 		ThrowNativeError(SP_ERROR_NATIVE, "MathTrigger was invalid!");
 }
+// public native void MathTrigger::GetEvaluators(Handle plugin=INVALID_HANDLE, ArrayList evaluators=null)
+public any Native_MathTrigger_GetEvaluators(Handle plugin, int argc) {
+	int trigger = GetNativeCell(1);
+	Handle pluginSource = view_as<Handle>(GetNativeCell(2));
+	if (pluginSource == INVALID_HANDLE) pluginSource = plugin;
+	ArrayList collection = view_as<ArrayList>(GetNativeCell(3));
+	int count, action;
+	int trigmask = TriggerToIdBits(trigger);
+	for (int i;i<autoActions.Length;i++) {
+		if (((action=autoActions.Get(i,FormulaAction::key))&trigmask)==trigmask &&
+			autoActions.Get(i,FormulaAction::source)==FSource_Plugin &&
+			autoActions.Get(i,FormulaAction::owner)==pluginSource) {
+			collection.Push(action);
+			count++;
+		}
+	}
+}
 // public native void Evaluator::Fire()
 public any Native_Evaluator_Fire(Handle plugin, int argc) {
 	int evaluator = GetNativeCell(1);
-	//check if this thing actually exists
-	int at = autoActions.FindValue(evaluator);
-	if (at < 0) ThrowNativeError(SP_ERROR_NATIVE, "Evaluator was invalid!");
-	FormulaAction action;
-	autoActions.GetArray(at, action);
-	FireAction(action);
+	if (!FireActionByKey(evaluator))
+		ThrowNativeError(SP_ERROR_NATIVE, "Evaluator was invalid!");
 }
 // public native void Evaluator::SetFilter(const char[])
 public any Native_Evaluator_SetFilter(Handle plugin, int argc) {
@@ -237,6 +252,15 @@ int RegisterTrigger(const char[] name) {
 	tmp = triggerNames.PushString(name); //generate new trigger idx
 	return tmp;
 }
+bool FireActionByKey(int key) {
+	//check if this thing actually exists
+	int at = autoActions.FindValue(key);
+	if (at < 0) return false;
+	FormulaAction action;
+	autoActions.GetArray(at, action);
+	FireAction(action);
+	return true;
+}
 void FireAction(FormulaAction action) {
 	float value;
 	char name[MAX_NAME_LENGTH];
@@ -252,8 +276,7 @@ void FireAction(FormulaAction action) {
 		} else if (value <= 0.0) return; //filter failed
 	}
 	if (StrEqual(action.output,"exec",false)) {
-		strcopy(buffer, sizeof(buffer), action.formula);
-		ReplaceVarNames(buffer, sizeof(buffer));
+		ParseMathString(action.formula, buffer, sizeof(buffer));
 		ServerCommand("%s", buffer);
 	} else if (!eval(action.formula,0,_,value) || !setVariable(action.output, value, true)) {
 		GetPluginInfo(action.owner, PlInfo_Name, name, sizeof(name));
@@ -272,13 +295,14 @@ bool TriggerAction(int trigger) {
 	}
 	return true;
 }
-int CreateAction(Handle owner=INVALID_HANDLE, int trigger, const char[] output, const char[] formula, int filter=-1, eFormulaSource source=FSource_Plugin) {
+int CreateAction(Handle owner=INVALID_HANDLE, int trigger, const char[] output, const char[] formula, int filter=-1, int sourceFile=-1) {
 	if (0>trigger>=triggerNames.Length) return -1; //trigger has no associated name
 	if (autoActions.Length>MAX_ACTIONS) return -2; //can't store more actions
 	FormulaAction action;
 	action.key = generateKey(trigger);
-	action.source = source;
+	action.source = (sourceFile == -1) ? FSource_Plugin : FSource_Config;
 	action.owner = owner;
+	action.sourceConfigName = sourceFile;
 	action.filter = filter;
 	strcopy(action.output, sizeof(FormulaAction::output), output);
 	strcopy(action.formula, sizeof(FormulaAction::formula), formula);
@@ -327,70 +351,190 @@ void NotifyVariableChanged(const char[] name, float value) {
 	Call_Finish();
 }
 
-//using the power of regex, search only for candidate variables
-// that actually appear in the buffer, and replace them if set
-// logic would be roughly like this, but in pain:
-// buffer.replace(/\b[if][$]\w+/, match=>isVariable(match)?getVariable(match):match)
-void ReplaceVarNames(char[] buffer, int maxsize) {
-	int matches = varFormat.MatchAll(buffer);
-	char[] repl = new char[maxsize];
-	char capture[MAX_OUTPUT_LENGTH+1];
-	char substr[MAX_FORMULA_LENGTH];
-	int from,head,clen;
-	
-	for (int i=0;i<matches;i++) {
-		varFormat.GetSubString(0, capture, sizeof(capture), i);
-		head = varFormat.MatchOffset(i);
-		clen = strlen(capture);
-		head -= clen; //why tf is MatchOffset returning the END index?
-		
-		//append head (pre-match) to output
-		if (head>from) {
-			int len=head-from+1;//include \0 for copy
-			if (len>sizeof(substr)) len = sizeof(substr);
-			strcopy(substr, len, buffer[from]);
-			StrCat(repl, maxsize, substr);
-			from = head;
-		}
-		
-		//append replacement to output
-		from += clen; //end of capture for next head
-		if (getVariableType(capture[1])==1) {
-			float value;
-			if (!getVariable(capture[1], value)) {/*dont replace*/}
-			else if (capture[0]=='i') {
-				Format(capture, sizeof(capture), "%i", RoundToZero(value));
+// == Utils for parsing complexer strings with formulas and variables
+
+// allows expressions wrapped in # to be evaludated. ## is the scape for # characters outside of math expressions
+// it's a bit like latex $math$, but i already used $ as user variable prefix
+// asClient controlls cvar access, 0 = server, -1 = blocked
+bool ParseMathString(const char[] raw, char[] out, int maxsize, int asClient=0) {
+	int end = strlen(raw); if (maxsize <= end) end = maxsize-1; //comparing string len to buffer len, keep 1 space for \0
+	int c, from, len;
+	char buffer[MAX_FORMULA_LENGTH];
+	char[] outbuf = new char[maxsize]; // guaranteed zero-ed
+	bool inMathContext;
+	for (;c<end;c++) {
+		if (raw[c] == '#') {
+			//collect chars to next marker
+			len = c-from+1; //to = c (exclusive) -> len = to-from (+1 for \0)
+			if (len > sizeof(buffer)) len = sizeof(buffer); //do not exceed buffer size
+			strcopy(buffer, len, raw[from]);
+			from = c+1; //move from post # for next part
+			//if we were in math context, eval and replace buffer
+			if (inMathContext) {
+				float value;
+				if (!eval(buffer, _, _, value, asClient)) return false;
+				if (FloatFraction(value) < 0.000001) {
+					Format(buffer, sizeof(buffer), "%i", RoundToZero(value));
+				} else {
+					Format(buffer, sizeof(buffer), "%f", value);
+				}
+			}
+			//append buffer and switch context
+			StrCat(outbuf, maxsize, buffer);
+			//chekc for ##
+			if (raw[c+1] == '#' && !inMathContext) {
+//				StrCat(outbuf, maxsize, "#");
+				c++;
 			} else {
-				Format(capture, sizeof(capture), "%f", value);
+				inMathContext =! inMathContext;
 			}
 		}
-		StrCat(repl, maxsize, capture);
 	}
-	//tail handling
-	if (from < strlen(buffer)) {
-		StrCat(repl, maxsize, buffer[from]);
+	if (inMathContext) return PutError2(false, "Math context starting at %i not terminated", from);
+	if (from<end) { //copy tail
+		len = end-from+1; //+1 for \0
+		strcopy(buffer, len, raw[from]);
+		StrCat(outbuf, maxsize, buffer);
 	}
-	//copy back
-	strcopy(buffer, maxsize, repl);
+	strcopy(out, maxsize, outbuf);
+	return true;
 }
-//naive approach, this might be faster for small amounts of
-// variables, but iterating over every varibale will be slow
-// if a bunch are defined
-//void ReplaceVarNames(char[] buffer, int maxsize) {
-//	static RegEx
-//	char key[MAX_OUTPUT_LENGTH+1];
-//	char rep[32];
-//	float value;
-//	StringMapSnapshot snap = varValues.Snapshot();
-//	for (int i=0;i<snap.Length;i++) {
-//		snap.GetKey(i,key[1],sizeof(key)-1);
-//		if (!varValues.GetValue(key[1], value)) continue;
-//		key[0]='f';
-//		Format(rep, sizeof(rep), "%f", value);
-//		ReplaceString(buffer, maxsize, key, rep, false);
-//		key[0]='i';
-//		Format(rep, sizeof(rep), "%i", RoundToZero(value));
-//		ReplaceString(buffer, maxsize, key, rep, false);
-//	}
-//	delete snap;
-//}
+
+// == Config Utilities
+
+static void LoadFromKeyValues(KeyValues kv, ArrayList newActions=null, int sourceFileIndex) {
+	char name[MAX_FORMULA_LENGTH], value[MAX_FORMULA_LENGTH];
+	int at;
+	if (kv.GotoFirstSubKey()) do {
+		kv.GetSectionName(name, sizeof(name));
+		at = triggerNames.FindString(name);
+		if (at < 0) continue;
+		
+		if (kv.GotoFirstSubKey(false)) {
+			PrintToServer("Trigger %s:",name);
+			do {
+				//traverse triggers
+				kv.GetSectionName(name, sizeof(name));
+				bool section = kv.GetDataType(NULL_STRING)==KvData_None;
+				bool isFilter = StrEqual(name, "filter", false);
+				if (!section && !isFilter) {
+					//parse unfiltered actions
+					int action;
+					kv.GetString(NULL_STRING, value, sizeof(value));
+					if ((action=CreateAction(_, at, name, value, _, sourceFileIndex))>=0) {
+						PrintToServer(" %08X %s = %s",action,name,value);
+						if (newActions!=null) newActions.Push(action);
+					}
+				} else if (section && isFilter) {
+					//parse blocks of "filter fule" { actions }
+					char filter[256]; int fidx;
+					if (kv.GotoFirstSubKey()) do {
+						kv.GetSectionName(filter, sizeof(filter));
+						fidx = CreateFilter(filter);
+						//parse filtered actions
+						if (kv.GotoFirstSubKey(false)) do {
+							kv.GetSectionName(name, sizeof(name));
+							section = kv.GetDataType(NULL_STRING)==KvData_None;
+							if (!section) {
+								int action;
+								kv.GetString(NULL_STRING, value, sizeof(value));
+								if ((action=CreateAction(_, at, name, value, fidx, sourceFileIndex))>=0) {
+									PrintToServer(" %08X %s = %s if: %s",action,name,value,filter);
+									if (newActions!=null) newActions.Push(action);
+								}
+							}
+						} while (kv.GotoNextKey(false));
+						kv.GoBack();
+					} while (kv.GotoNextKey());
+					kv.GoBack();
+				}
+				//ideas for formulating sections:
+				// - filters to conditionally trigger
+				// - maybe let it run commands conditionally?
+				
+			} while (kv.GotoNextKey(false));
+		}
+		kv.GoBack();
+	} while (kv.GotoNextKey());
+}
+
+bool LoadConfigByName(const char[] name, bool triggerLoad=false) {
+	int sourceIdx = sourceConfigNames.FindString(name);
+	if (sourceIdx < 0) sourceIdx = sourceConfigNames.PushString(name);
+	else if (countActionsFromConfig(sourceIdx)>0) return false;
+	
+	char path[PLATFORM_MAX_PATH], name2[128];
+	KeyValues kv;
+	ArrayList actions = null;
+	if (triggerLoad) actions = new ArrayList();
+	
+	strcopy(name2, sizeof(name2), name);
+	ReplaceString(name2, sizeof(name2), "..", "xx"); //don't give opportunity to traverse up
+	BuildPath(Path_SM, path, sizeof(path), "configs/formula/%s.cfg", name2);
+	if (!FileExists(path)) return false;
+	kv = new KeyValues("formula");
+	kv.ImportFromFile(path);
+	
+	LoadFromKeyValues(kv, actions, sourceIdx);
+	delete kv;
+	
+	if (triggerLoad) {
+		int tclmask = TriggerToIdBits(trig_conf);
+		for (int aidx;aidx<actions.Length;aidx++) {
+			int akey = actions.Get(aidx);
+			if ((akey & TriggerMask)==tclmask) {
+				FireActionByKey(akey);
+			}
+		}
+	}
+	delete actions;
+	return true;
+}
+int UnloadConfigByName(const char[] name) {
+	int source = sourceConfigNames.FindString(name);
+	if (source < 0) return 0;
+	int z;
+	for (int i=autoActions.Length-1;i>=0;i--) {
+		if (autoActions.Get(i,FormulaAction::sourceConfigName) == source) {
+			RemoveAction(autoActions.Get(i,FormulaAction::key));
+			z++;
+		}
+	}
+	return z;
+}
+int countActionsFromConfig(int source) {
+	int z;
+	for (int i;i<autoActions.Length;i++) {
+		if (autoActions.Get(i,FormulaAction::sourceConfigName) == source) z++;
+	}
+	return z;
+}
+void ReloadConfigs() {
+	//reset auto actions
+	__removeConfigActions();
+	
+	char mapname[PLATFORM_MAX_PATH];
+	GetCurrentMap(mapname, sizeof(mapname));
+	
+	LoadConfigByName("default");
+	
+	LoadConfigByName(mapname);
+	
+	//notify default triggers to fire OnMapStart so user vars can init
+	TriggerAction(trig_conf);
+}
+
+void PrintListToConsole(int client) {
+	char name[128];
+	int actions;
+	PrintToConsole(client, "All %i known configs:", sourceConfigNames.Length);
+	for (int i;i<sourceConfigNames.Length;i++) {
+		sourceConfigNames.GetString(i, name, sizeof(name));
+		if ((actions=countActionsFromConfig(i))>0) {
+			PrintToConsole(client, " %2i %s: %i actions", i, name, actions);
+		} else {
+			PrintToConsole(client, " %2i %s: UNLOADED", i, name);
+		}
+	}
+}
+

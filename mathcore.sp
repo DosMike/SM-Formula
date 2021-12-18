@@ -1,3 +1,6 @@
+#if !defined __formula
+#error Not compiling from main file!
+#endif
 #if defined __formula_mathcore
 #endinput
 #endif
@@ -30,14 +33,14 @@ enum CVarDataType {
 	CVType_Int
 }
 
-static bool convarAccess; //used to block cvar access for single eval calls
+static int convarAccess; //used to block cvar access for single eval calls
 static StringMap varValues;
 static StringMap targetValues; //cached results for target strings
 static ArrayList tickAssignments; //prevent cyclic assignments
 
 char evalError[PLATFORM_MAX_PATH];
 //static void PutError(const char[] format, any...) { VFormat(evalError, sizeof(evalError), format, 2); }
-static any PutError2(any value, const char[] format, any...) { VFormat(evalError, sizeof(evalError), format, 3); return value; }
+any PutError2(any value, const char[] format, any...) { VFormat(evalError, sizeof(evalError), format, 3); return value; }
 
 void __mathcore_init() {
 	if (varValues == null) varValues = new StringMap();
@@ -77,11 +80,13 @@ int GetPriorityOp(MOperator op) {
 	}
 }
 
-/** parsetype: 0 root, 1 group, 2 arguments */
-bool eval(const char[] formula, int parseType=0, int& consumed=0, float& returnValue, bool convars=true) {
+/** parsetype: 0 root, 1 group, 2 arguments
+ * asClient is the client to use for permission checks on cvars, or -1 to block access
+ */
+bool eval(const char[] formula, int parseType=0, int& consumed=0, float& returnValue, int asClient=0) {
 	if (parseType==0) {
 		//set the access flag for the remainder of this call
-		convarAccess = convars;
+		convarAccess = asClient;
 	}
 	ArrayStack valueStack = new ArrayStack();
 	ArrayStack operandStack = new ArrayStack();
@@ -138,7 +143,8 @@ bool eval(const char[] formula, int parseType=0, int& consumed=0, float& returnV
 				//might be a valid token, but not now
 				return PutError2(false, "Syntax error around %i", cursor);
 			}
-		} else if (eGetValue(formula, cursor, value)) {
+		} else if ((type = eGetValue(formula, cursor, value))!=0) {
+			if (type < 0) return false;//already pushed error
 			if (lastValue) return PutError2(false, "Operator expected at %i", cursor);
 			if (!operandStack.Empty) {
 				if ((op=operandStack.Pop())==OP_Negate) value =- value;
@@ -365,10 +371,22 @@ static bool eSkipSpace(const char[] f, int& cursor) {
 	return f[cursor]!=0;
 }
 /** return true if a value was read */
-static bool eGetValue(const char[] f, int& cursor, float& value) {
+static int eGetValue(const char[] f, int& cursor, float& value) {
 	int read = StringToFloatEx(f[cursor], value);
 	cursor += read;
-	return !!read;
+	if (read > 0 && f[cursor]=='d') {
+		if (FloatFraction(value) >= 0.000001) return PutError2(-1, "Error in dice notation: Integer expected for dice count");
+		cursor++;
+		int diecount = RoundToNearest(value);
+		read = StringToFloatEx(f[cursor], value);
+		if (read == 0 || FloatFraction(value) >= 0.000001) return PutError2(-1, "Error in dice notation: Integer expected for pips count");
+		cursor += read;
+		int faces = RoundToNearest(value);
+		if (diecount > 100 || faces > 1000) return PutError2(-1, "Error in dice notation: Limits exceeded, max is 100d1000");
+		value = float(diecount);
+		for (;diecount>0;diecount--) value += float(RoundToZero(GetURandomFloat()*faces));
+	}
+	return read;
 }
 /**
  * return label type (>0) if label, 0 if no label, and -1 if error
@@ -503,15 +521,16 @@ bool getVariable(const char[] name, float& returnValue) {
 	} else if (name[0]=='@') {
 		returnValue = getOrComputeTargets(name);
 	} else {
-		if (!convarAccess) return PutError2(false, "You are not allowed to read convars!");
 		ConVar cvar = FindConVar(name);
 		if (cvar == null) return PutError2(false, "ConVar %s does not exist", name);
+		if (convarAccess<0 || !IsClientAllowedToChangeCvar(convarAccess, cvar)) return PutError2(false, "You are not allowed to read convars!");
+		if (GetConVarDataType(cvar) == CVType_String) return PutError2(false, "ConVar %s is not default numeric", name);
 		returnValue = cvar.FloatValue;
 		delete cvar;
 	}
 	return true;
 }
-bool setVariable(const char[] name, float value, bool notify) {
+bool setVariable(const char[] name, float value, bool notify, int asClient=0) {
 	if (name[0]=='$') {
 		notify &= tickAssignments.FindString(name) == -1;
 		if (notify) tickAssignments.PushString(name);
@@ -522,6 +541,8 @@ bool setVariable(const char[] name, float value, bool notify) {
 	} else {
 		ConVar cvar = FindConVar(name);
 		if (cvar == null) return PutError2(false, "ConVar %s does not exist", name);
+		if (convarAccess<0 || !IsClientAllowedToChangeCvar(asClient, cvar))
+			return PutError2(false, "You are not allowed to read convars!");
 		CVarDataType type = GetConVarDataType(cvar);
 		if (type == CVType_String) return PutError2(false, "Can not assign to String ConVar %s", name);
 		else if (type == CVType_Int) cvar.SetInt(RoundToZero(value));
@@ -529,19 +550,6 @@ bool setVariable(const char[] name, float value, bool notify) {
 		delete cvar;
 	}
 	return true;
-}
-int getVariableType(const char[] name) {
-	if (name[0]=='$') {
-		float dummy;
-		if (varValues.GetValue(name, dummy)) return 1;
-	} else if (name[0]!='@') {
-		bool exist;
-		ConVar cvar = FindConVar(name);
-		exist = cvar != null;
-		delete cvar;
-		if (exist) return 2;
-	}
-	return 0;
 }
 
 CVarDataType GetConVarDataType(ConVar cvar) {

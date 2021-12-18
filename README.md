@@ -35,6 +35,8 @@ In addition to addition, subtraction, multiplication, division and modulo (remai
 - Comparisons (`<`,`<=`,`=`,`>=`,`>`,`<>`)
 - Conjunction (and) and Disjunction (or) 
 
+As a small little bonus the parser will also handle dice notation with syntax `int'd'int`, rolling a die with the right-hand number of pips left-hand times. `1d20` would give a value from 1 to 20; `3d4` would give 3 to 12 or `round(rand(1,4))+round(rand(1,4))+round(rand(1,4))`.
+
 ## Configs
 
 The point after all, was to automatically set ConVars.
@@ -64,9 +66,9 @@ The difference between `OnMapStart` and `OnFormulasReloaded` is that the former 
 
 In addition to these default triggers there's also one default variable that will update automatically, and that's `$edicts`. While this plugin itself does not give entity count based triggers, this number might be helpful for other stuff as well.
 
-Within `filter` you can list multiple blocks that will only trigger, if the condition the the name evaluates &gt;0. For example you could `"filter" { "$maptime-4" { "mp_autoteambalance" "if(@all-9,1,0)" } }` to set auto team balance if there are 10 or more players but only after minute 5 (inclusive).
+Within `filter` you can list multiple blocks that will only trigger, if the condition the the name evaluates &gt;0. For example you could `"filter" { "$maptime>=5" { "mp_autoteambalance" "if(@all>=10,1,0)" } }` to set auto team balance if there are 10 or more players but only after minute 5 (inclusive).
 
-You can also execute server commands. Instead of a cvar name just put `exec` and the command as value. You can put user variables into the command as well, but you have to prefix them with `i` for integer or `f` for numbers with decimals (floats). They should look something like `i$edicts`. Formulas, cvars and target selectors wont work here.
+You can also execute server commands. Instead of a cvar name just put `exec` and the command as value. The commands support math context similar to `/mathexec`. Put math expressions between pund signs (`#`) to evaluate them. If you need integer values, round() them and decimals will not be appended. With this you could for example `sm_slap @all #round[rand[0,1]]#`. This will not work for setting convars unless you use the command `sm_cvar`!
 
 Besides a `default.cfg` config, you can create configs for every map (`mapname.cfg`). The configs should be located in your sourcemod directory under `/configs/formula/`.
 
@@ -79,9 +81,17 @@ Because this command can read and set ConVars, it requires the RCon admin-flag.
 You can use `sm_eval <formula>` or `sm_calc <formula>` to compute values, the result is displayed to you.
 This is available to all players, but only players with the RCon admin-flag can use ConVars!
 
-If you need to reload the configs, you can use `sm_formula_reload`. This should keep all user variables, unless assigned in `OnFormulasReloaded`.
+Another command is `sm_mathexec <commands>`. This is the command equivalent to exec entries in the config. You can specify math expressions within pound signs (`#`) to be evaluated. If you have the cvar admin flag you can use ConVar names as variables within those expressions. After evaluation the command will be run as client (unless called through server console), so permissions should be honored. If you need a literal `#` you can double it up as with the config. The example from above would now look something like `sm_mathexec sm_slap @all #round[rand[0,1]]#`
 
-In case you want to unload all configs for some reason, you can do so with `sm_formula_unload` instead of `sm plugins unload formula`. This will keep current user vars in memory as well. This command as well as the reload command requires the config admin flag (This should come as no surprise, you're un-/reloading configs here).
+There's a set of commands similar to SourceMods plugin commands for managing configs.
+- `sm_formula_list` will show all known and loaded configs. Names usually stick around until map change.
+- `sm_formula_load <name>` will load a config if not already loaded.
+- `sm_formula_reload` will nuke and reload default and map configs.
+- `sm_formula_reload <name>` will only reload the specified config.
+- `sm_formula_unload` will completely unload all configs.
+- `sm_formula_unload <name>` will only unload the specified config.
+
+Specify the config names relative to the `sourcemod/configs/formula/` directory. You can specify and organize configs in sub folders but don't add the `.cfg` extension for the commands. Unloading config will keep all user variables set by the config in memory until map change. These commands require the config admin flag (This should come as no surprise, you're un-/reloading configs here).
 
 ## Plugins
 

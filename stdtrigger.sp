@@ -1,16 +1,10 @@
+#if !defined __formula
+#error Not compiling from main file!
+#endif
 #if defined __formula_stdtrigger
 #endinput
 #endif
 #define __formula_stdtrigger
-
-int trig_map;
-int trig_conf;
-int trig_round;
-int trig_join;
-int trig_part;
-int trig_spawn;
-int trig_death;
-int trig_time;
 
 void __stdtrigger_init() {
 	trig_map   = RegisterTrigger("OnMapStart");

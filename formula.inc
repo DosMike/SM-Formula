@@ -100,6 +100,16 @@ methodmap MathTrigger {
 	 * All errors will be logged with LogError. For more control use Eval.
 	 */
 	public native void Fire();
+	/**
+	 * Get all actions for the specified plugin source. Specify INVALID_HANDLE
+	 * to retrieve evaluators for your plugin. If you do not specify an array list,
+	 * only the evaluator count for this filter will be returned.
+	 * 
+	 * @param plugin - the plugin to filter evaluators on this trigger with
+	 * @param evaluators - array list to collect evaluators for this trigger into
+	 * @return the number of evaluators registered to this trigger by the plugin
+	 */
+	public native int GetEvaluators(Handle plugin=INVALID_HANDLE, ArrayList evaluators=null);
 }
 
 public SharedPlugin __pl_formula = {
@@ -122,5 +132,6 @@ public void __pl_formula_SetNTVOptional() {
 	MarkNativeAsOptional("MathTrigger.MathTrigger");
 	MarkNativeAsOptional("MathTrigger.AddFormula");
 	MarkNativeAsOptional("MathTrigger.Fire");
+	MarkNativeAsOptional("MathTrigger.GetEvaluators");
 }
 #endi
