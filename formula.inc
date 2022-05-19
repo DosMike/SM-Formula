@@ -51,6 +51,17 @@ native float Formula_GetVariable(const char[] name, bool& isset=false);
 forward void OnFormulaVariableChanged(const char[] name, float& value);
 
 /**
+ * Called when a trigger was dropped. This can happen when configs are reloaded
+ * and all actions were forcefully removed from the trigger.
+ * When you receive this forward, the passed trigger id is no longer valid under
+ * the context that you obtained it and any further access is undefined behaviour.
+ *
+ * @param trigger - the trigger id that was dropped
+ * @param name - the trigger name
+ */
+forward void OnFormulaTriggerDropped(int trigger, const char[] name);
+
+/**
  * Represents the action of assigning a formula result to an output specified whenever fired
  */
 methodmap Evaluator {

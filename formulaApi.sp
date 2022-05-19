@@ -16,6 +16,7 @@
 #define MAX_FILTERS 2048
 
 enum eFormulaSource {
+	FSource_Any=-1,
 	FSource_Plugin,
 	FSource_Config,
 }
@@ -35,6 +36,7 @@ static ArrayList autoFilters;
 ArrayList sourceConfigNames;
 
 GlobalForward fwdVariableChanged;
+GlobalForward fwdTriggerDropped;
 
 void __api_init() {
 	if (triggerNames == null) triggerNames = new ArrayList(ByteCountToCells(MAX_TRIGGERNAME_LENGTH));
@@ -52,10 +54,12 @@ void __api_init() {
 		sourceConfigNames.Clear();
 	if (fwdVariableChanged == null)
 		fwdVariableChanged = new GlobalForward("OnFormulaVariableChanged", ET_Ignore, Param_String, Param_Float);
+	if (fwdTriggerDropped == null)
+		fwdTriggerDropped = new GlobalForward("OnFormulaTriggerDropped", ET_Ignore, Param_Cell, Param_String);
 }
 
 void __removeConfigActions() {
-	int c,d;
+	int c,d,t;
 	for (int i=autoActions.Length-1;i>=0;i--) {
 		if (autoActions.Get(i,FormulaAction::source)==FSource_Config) {
 			autoActions.Erase(i);
@@ -65,7 +69,13 @@ void __removeConfigActions() {
 	d = autoFilters.Length;
 	autoFilters.Clear();
 	sourceConfigNames.Clear();
-	PrintToServer("Dropped %i Actions and %i Filters", c, d);
+	for (int i=triggerNames.Length-1;i>=0;i-=1) {
+		if (DropTrigger(i, FSource_Config)) t++;
+	}
+	if (t)
+		PrintToServer("Dropped %i Actions and %i Filters, clearing %i Triggers", c, d, t);
+	else
+		PrintToServer("Dropped %i Actions and %i Filters", c, d);
 }
 
 // == native stuff
@@ -248,8 +258,12 @@ static int generateKey(int trigger) {
 int RegisterTrigger(const char[] name) {
 	int tmp;
 	if ((tmp=triggerNames.FindString(name))>=0) return tmp; //already registered
-	if (triggerNames.Length >= MAX_TRIGGERS) return -1; //don't want this to be too big
-	tmp = triggerNames.PushString(name); //generate new trigger idx
+	if ((tmp=triggerNames.FindString(""))>=0) { //replace a dropped trigger
+		triggerNames.SetString(tmp, name);
+	} else {
+		if (triggerNames.Length >= MAX_TRIGGERS) return -1; //don't want this to be too big
+		tmp = triggerNames.PushString(name); //generate new trigger idx
+	}
 	return tmp;
 }
 bool FireActionByKey(int key) {
@@ -288,11 +302,81 @@ bool TriggerAction(int trigger) {
 	if (0>trigger>=triggerNames.Length) return false; //trigger has no associated name
 	int trig = TriggerToIdBits(trigger);
 	FormulaAction action;
-	for (int i;i<autoActions.Length;i++) {
-		autoActions.GetArray(i, action);
+	for (int index; index < autoActions.Length; index+=1) {
+		autoActions.GetArray(index, action);
 		if ((action.key & TriggerMask) == trig)
 			FireAction(action);
 	}
+	return true;
+}
+//int GetTriggerActionCount(int trigger, eFormulaSource source=FSource_Any) {
+//	if (0>trigger>=triggerNames.Length) return 0;
+//	int trig = TriggerToIdBits(trigger);
+//	int count;
+//	FormulaAction action;
+//	for (int index; index < autoActions.Length; index+=1) {
+//		autoActions.GetArray(index,action);
+//		if ((action.key & TriggerMask) == trig) {
+//			if (source == FSource_Any || action.source == source) 
+//				count += 1;
+//		}
+//	}
+//	return count;
+//}
+/** removes actions from a trigger and drops the trigger if no actions remain
+ * @dropActions - can be used to limit the source for actions to be removed
+ * @sourceFileIndex - only consider this config file if dropActions is FSource_Config or -1 for all configs
+ * @return true if the action was dropped
+ */
+bool DropTrigger(int trigger, eFormulaSource dropActions=FSource_Any, int sourceFileIndex=-1) {
+	if (0>trigger>=triggerNames.Length) return false; //trigger has no associated name
+	int trig = TriggerToIdBits(trigger);
+	FormulaAction action;
+	bool actionsRemain;
+	//remove all remaining actions as specified by the filters
+	for (int index=autoActions.Length-1; index >= 0; index-=1) {
+		autoActions.GetArray(index, action);
+		if ((action.key & TriggerMask) == trig) {
+			if (dropActions == FSource_Config && action.source == FSource_Config) {
+				if (sourceFileIndex<0 || sourceFileIndex == action.sourceConfigName)
+					RemoveAction(action.key);
+				else
+					actionsRemain = true;
+			} else if (dropActions == FSource_Any || action.source == dropActions)
+				RemoveAction(action.key);
+			else
+				actionsRemain = true;
+		}
+	}
+	if (actionsRemain) return false; //can't drop trigger, it still has actions
+	if (trigger == trig_map || trigger == trig_conf || trigger == trig_round
+	|| trigger == trig_join || trigger == trig_part || trigger == trig_spawn
+	|| trigger == trig_part || trigger == trig_time) {
+		return true; //never really remove default triggers, just pretend
+	}
+	char triggerName[MAX_TRIGGERNAME_LENGTH];
+	triggerNames.GetString(trigger, triggerName, sizeof(triggerName));
+	triggerNames.SetString(trigger,"");
+	//we can't really move triggers around, so erasing an entry in the middle of the list is not an option
+	char buffer[4];
+	for(int index=triggerNames.Length-1; index >= 0; index-=1) {
+		triggerNames.GetString(index, buffer, sizeof(buffer));
+		if (buffer[0]!=0) //check for empty string
+			break;
+		//erase dropped triggers from the end, as they do not have any remaining actions
+		triggerNames.Erase(index);
+	}
+	//handle mod event triggers
+	if (StrContains(triggerName,"event:")==0) {
+		//unhook this dynamic trigger
+		UnhookEvent(triggerName[6], OnModEvent);
+		trig_events.SetValue(triggerName[6], 0);
+	}
+	//notify, as dependend plugins might have to update triggers
+	Call_StartForward(fwdTriggerDropped);
+	Call_PushCell(trigger);
+	Call_PushString(triggerName);
+	Call_Finish();
 	return true;
 }
 int CreateAction(Handle owner=INVALID_HANDLE, int trigger, const char[] output, const char[] formula, int filter=-1, int sourceFile=-1) {
@@ -404,14 +488,17 @@ bool ParseMathString(const char[] raw, char[] out, int maxsize, int asClient=0) 
 
 static void LoadFromKeyValues(KeyValues kv, ArrayList newActions=null, int sourceFileIndex) {
 	char name[MAX_FORMULA_LENGTH], value[MAX_FORMULA_LENGTH];
-	int at;
+	int triggerId;
 	if (kv.GotoFirstSubKey()) do {
 		kv.GetSectionName(name, sizeof(name));
-		at = triggerNames.FindString(name);
-		if (at < 0) continue;
+		triggerId = triggerNames.FindString(name);
+		if (triggerId < 0) {
+			triggerId = GetModEventTrigger(name);
+			if (triggerId < 0) continue; //not a mod event trigger either
+		}
 		
 		if (kv.GotoFirstSubKey(false)) {
-			PrintToServer("Trigger %s:",name);
+//			PrintToServer("Trigger %s:",name);
 			do {
 				//traverse triggers
 				kv.GetSectionName(name, sizeof(name));
@@ -421,8 +508,8 @@ static void LoadFromKeyValues(KeyValues kv, ArrayList newActions=null, int sourc
 					//parse unfiltered actions
 					int action;
 					kv.GetString(NULL_STRING, value, sizeof(value));
-					if ((action=CreateAction(_, at, name, value, _, sourceFileIndex))>=0) {
-						PrintToServer(" %08X %s = %s",action,name,value);
+					if ((action=CreateAction(_, triggerId, name, value, _, sourceFileIndex))>=0) {
+//						PrintToServer(" %08X %s = %s",action,name,value);
 						if (newActions!=null) newActions.Push(action);
 					}
 				} else if (section && isFilter) {
@@ -438,8 +525,8 @@ static void LoadFromKeyValues(KeyValues kv, ArrayList newActions=null, int sourc
 							if (!section) {
 								int action;
 								kv.GetString(NULL_STRING, value, sizeof(value));
-								if ((action=CreateAction(_, at, name, value, fidx, sourceFileIndex))>=0) {
-									PrintToServer(" %08X %s = %s if: %s",action,name,value,filter);
+								if ((action=CreateAction(_, triggerId, name, value, fidx, sourceFileIndex))>=0) {
+//									PrintToServer(" %08X %s = %s if: %s",action,name,value,filter);
 									if (newActions!=null) newActions.Push(action);
 								}
 							}
@@ -494,11 +581,14 @@ int UnloadConfigByName(const char[] name) {
 	int source = sourceConfigNames.FindString(name);
 	if (source < 0) return 0;
 	int z;
-	for (int i=autoActions.Length-1;i>=0;i--) {
+	for (int i=autoActions.Length-1;i>=0;i-=1) {
 		if (autoActions.Get(i,FormulaAction::sourceConfigName) == source) {
 			RemoveAction(autoActions.Get(i,FormulaAction::key));
 			z++;
 		}
+	}
+	for (int i=triggerNames.Length-1;i>=0;i-=1) {
+		DropTrigger(i, FSource_Config, source);
 	}
 	return z;
 }
