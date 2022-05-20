@@ -8,7 +8,7 @@
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "21w50b"
+#define PLUGIN_VERSION "22w20a"
 
 #define MAX_FORMULA_LENGTH 512
 #define MAX_OUTPUT_LENGTH 128
@@ -20,7 +20,7 @@ public Plugin myinfo = {
 	author = "reBane",
 	description = "Have some calc action with cvars",
 	version = PLUGIN_VERSION,
-	url = "N/A"
+	url = "https://github.com/DosMike/SM-Formula"
 }
 
 //global trigger ids in canse we need them
@@ -32,6 +32,7 @@ int trig_part;
 int trig_spawn;
 int trig_death;
 int trig_time;
+StringMap trig_events;
 
 #include "mathcore.sp"
 #include "formulaApi.sp"
