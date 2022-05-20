@@ -244,7 +244,7 @@ bool eval(const char[] formula, int parseType=0, int& consumed=0, float& returnV
 				lastValue = true;
 			} else {
 				if (lastValue) return PutError2(false, "Operator expected at %i", cursor);
-				if (!getVariable(name,value)) return false;
+				if (!getVariable(name,value,asClient)) return false;
 				if (!operandStack.Empty) {
 					if ((op=operandStack.Pop())==OP_Negate) value =- value;
 					else operandStack.Push(op); //return op to stack if not negate
@@ -514,8 +514,16 @@ static bool isKeyword(const char[] n) {
 	else return false;
 }
 
-bool getVariable(const char[] name, float& returnValue) {
+bool getVariable(const char[] name, float& returnValue, int asClient=0) {
 	if (name[0]=='$') {
+		if (asClient) {
+			char ownedname[MAX_NAME_LENGTH];
+			Format(ownedname,sizeof(ownedname),"%i%s",GetClientUserId(asClient),name);
+			if (varValues.GetValue(ownedname, returnValue)) {
+				return true; //this exists as user var, use the user var
+			}
+			//otherwise continue and try to get global var
+		}
 		if (!varValues.GetValue(name, returnValue))
 			return PutError2(false, "Variable %s was not assigned a value", name);
 	} else if (name[0]=='@') {
@@ -534,8 +542,19 @@ bool setVariable(const char[] name, float value, bool notify, int asClient=0) {
 	if (name[0]=='$') {
 		notify &= tickAssignments.FindString(name) == -1;
 		if (notify) tickAssignments.PushString(name);
-		varValues.SetValue(name, value);
-		if (notify) NotifyVariableChanged(name, value);
+		//check if this exists as global var
+		float dummy;
+		if (asClient==0 || varValues.GetValue(name, dummy)) {
+			//set the global value if it is a global var
+			varValues.SetValue(name, value);
+			if (notify) NotifyVariableChanged(name, value, 0);
+		} else {
+			//otherwise create the var for the client
+			char ownedname[MAX_NAME_LENGTH];
+			Format(ownedname, sizeof(ownedname), "%i%s",GetClientUserId(asClient),name);
+			varValues.SetValue(ownedname, value);
+			if (notify) NotifyVariableChanged(name, value, asClient);
+		}
 	} else if (name[0]=='@') {
 		return PutError2(false, "Can't set value for target selectors (%s)", name);
 	} else {
@@ -550,6 +569,24 @@ bool setVariable(const char[] name, float value, bool notify, int asClient=0) {
 		delete cvar;
 	}
 	return true;
+}
+
+void dropVariables(int owner) {
+	if (!(1<=owner<=MaxClients)) return;
+	
+	char buffer[MAX_NAME_LENGTH];
+	char uid[32];
+	Format(uid,sizeof(uid),"%i$",GetClientUserId(owner));
+	
+	StringMapSnapshot snap = varValues.Snapshot();
+	for (int i=snap.Length-1;i>=0;i-=1) {
+		snap.GetKey(i,buffer,sizeof(buffer));
+		if (StrContains(buffer,uid)==0) {
+			//variable starts with this uid$, so delete
+			varValues.Remove(buffer);
+		}
+	}
+	delete snap;
 }
 
 CVarDataType GetConVarDataType(ConVar cvar) {
