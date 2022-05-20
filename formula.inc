@@ -22,22 +22,26 @@ native bool Formula_Eval(const char[] formula, float& result, bool convars=true,
 /* 
  * Set a variable name for evaluation. Using these variables in a formula requires
  * them to be prefixed by $. ConVars can not be set using this function.
- * Please note that the variable context is global and only global!
+ * If a variable was created using global context it can not be shadowed with an
+ * owner. In that case the owner argument is ignored and the global value is set.
  * 
  * @param name - the variable name without $-prefix
  * @param value - the new value for this variable
+ * @param owner - set to limit the visibility of this variable to the specified client
  */
-native void Formula_SetVariable(const char[] name, float value);
+native void Formula_SetVariable(const char[] name, float value, int owner=0);
 /**
  * Get the value for this variable. Variables that do not exist return 0.0
  * If you want to check whether the variable was set, use the isset-parameter.
- * Please note that the variable context is global and only global!
+ * If a variable was created using global context it can not be shadowed with an
+ * owner. In that case the owner argument is ignored and the global value is retrieved.
  *
  * @param name - the variable name without $-prefix
  * @param isset - will be true if the variable was set
+ * @param owner - try to receive the variable for this client
  * @return the variables value or 0.0 if not set
  */
-native float Formula_GetVariable(const char[] name, bool& isset=false);
+native float Formula_GetVariable(const char[] name, bool& isset=false, int owner=0);
 
 /**
  * Called when a variable is changed through a formula.
@@ -47,8 +51,9 @@ native float Formula_GetVariable(const char[] name, bool& isset=false);
  *
  * @param name - the variable that changed
  * @param value - the new value
+ * @param owner - the client that's currently scoped to the variable or 0 if global
  */
-forward void OnFormulaVariableChanged(const char[] name, float& value);
+forward void OnFormulaVariableChanged(const char[] name, float& value, int owner);
 
 /**
  * Represents the action of assigning a formula result to an output specified whenever fired

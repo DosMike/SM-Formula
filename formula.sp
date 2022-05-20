@@ -212,3 +212,7 @@ public Action CommandReload(int client, int args) {
 public void OnMapStart() {
 	ReloadConfigs();
 }
+
+public void OnClientDisconnect(int client) {
+	dropVariables(client);
+}

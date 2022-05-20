@@ -51,7 +51,7 @@ void __api_init() {
 	else
 		sourceConfigNames.Clear();
 	if (fwdVariableChanged == null)
-		fwdVariableChanged = new GlobalForward("OnFormulaVariableChanged", ET_Ignore, Param_String, Param_Float);
+		fwdVariableChanged = new GlobalForward("OnFormulaVariableChanged", ET_Ignore, Param_String, Param_Float, Param_Cell);
 }
 
 void __removeConfigActions() {
@@ -118,10 +118,12 @@ public any Native_Formula_SetVariable(Handle plugin, int argc) {
 	char[] varname = new char[varnameLen];
 	varname[0]='$';
 	GetNativeString(1, varname[1], varnameLen-1);
+	int asClient = 0;
+	if (argc>2) asClient = GetNativeCell(3);
 	//validate name
 	checkWordChars(varname, 1);
 	float value = view_as<float>(GetNativeCell(2));
-	setVariable(varname, value, false, 0);
+	setVariable(varname, value, false, asClient);
 }
 // native float Formula_GetVariable(const char[] name, bool& isset=false)
 public any Native_Formula_GetVariable(Handle plugin, int argc) {
@@ -132,10 +134,12 @@ public any Native_Formula_GetVariable(Handle plugin, int argc) {
 	char[] varname = new char[varnameLen];
 	varname[0]='$';
 	GetNativeString(1, varname[1], varnameLen-1);
+	int asClient = 0;
+	if (argc>2) asClient = GetNativeCell(3);
 	//validate name
 	checkWordChars(varname, 1);
 	float value;
-	if (getVariable(varname, value)) {
+	if (getVariable(varname, value, asClient)) {
 		SetNativeCellRef(2, true);
 		return value;
 	} else {
@@ -344,10 +348,11 @@ int GetFilterCount(int filter) {
 	return result;
 }
 
-void NotifyVariableChanged(const char[] name, float value) {
+void NotifyVariableChanged(const char[] name, float value, int owner) {
 	Call_StartForward(fwdVariableChanged);
 	Call_PushString(name);
 	Call_PushFloat(value);
+	Call_PushCell(owner);
 	Call_Finish();
 }
 
